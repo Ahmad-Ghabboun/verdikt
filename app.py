@@ -1073,6 +1073,82 @@ with tab4:
     fig_cm = apply_chart_style(fig_cm, height=420)
     st.plotly_chart(fig_cm, use_container_width=True)
 
+    # ── ROC Curves ───────────────────────────────────────────────────
+    hr()
+    st.subheader("ROC Curves")
+
+    _SKLEARN_MODELS = [
+        m for m in model_comparison["Model"].tolist()
+        if m != "MLP Neural Network"
+    ]
+
+    roc_model_sel = st.selectbox(
+        "Select model for ROC curves",
+        options=_SKLEARN_MODELS,
+        index=0,
+        key="roc_model_sel",
+    )
+
+    if mlp_available and roc_model_sel == "MLP Neural Network":
+        st.info("ROC curves are not displayed for MLP Neural Network here. Select a tree-based or linear model.")
+    else:
+        @st.cache_data
+        def _compute_roc(model_name: str):
+            from sklearn.model_selection import train_test_split as _tts_roc
+            from sklearn.metrics import roc_curve, auc
+            import numpy as _np
+
+            X_r, y_r = load_features_targets()
+            _, X_te_r, _, y_te_r = _tts_roc(
+                X_r, y_r, test_size=0.3, random_state=42, stratify=y_r
+            )
+            _m = _load_model_file(f"models/{safe_name(model_name)}.joblib")
+            _proba = _m.predict_proba(X_te_r)
+
+            results = {}
+            for cls_idx, cls_label in CLASS_LABELS.items():
+                y_bin = (y_te_r.values == cls_idx).astype(int)
+                fpr, tpr, _ = roc_curve(y_bin, _proba[:, cls_idx])
+                roc_auc = auc(fpr, tpr)
+                results[cls_label] = {"fpr": fpr.tolist(), "tpr": tpr.tolist(), "auc": roc_auc}
+            return results
+
+        with st.spinner("Computing ROC curves..."):
+            _roc_data = _compute_roc(roc_model_sel)
+
+        _roc_colors = {"Model A Wins": "#4FC3F7", "Model B Wins": "#FF6B6B", "Tie": "#90E0EF"}
+        fig_roc = go.Figure()
+        for cls_label, vals in _roc_data.items():
+            fig_roc.add_trace(go.Scatter(
+                x=vals["fpr"], y=vals["tpr"],
+                mode="lines",
+                name=f"{cls_label} (AUC = {vals['auc']:.3f})",
+                line=dict(color=_roc_colors.get(cls_label, ACCENT), width=2),
+                hovertemplate="FPR: %{x:.3f}<br>TPR: %{y:.3f}<extra>" + cls_label + "</extra>",
+            ))
+        fig_roc.add_trace(go.Scatter(
+            x=[0, 1], y=[0, 1],
+            mode="lines",
+            name="Random (AUC = 0.500)",
+            line=dict(color=MUTED, width=1, dash="dash"),
+            hoverinfo="skip",
+        ))
+        fig_roc.update_layout(
+            title=f"ROC Curves (One-vs-Rest) — {roc_model_sel}",
+            xaxis_title="False Positive Rate",
+            yaxis_title="True Positive Rate",
+            legend=dict(x=0.55, y=0.08, bgcolor="rgba(0,0,0,0)"),
+        )
+        fig_roc = apply_chart_style(fig_roc, height=460)
+        st.plotly_chart(fig_roc, use_container_width=True)
+        st.caption(
+            "ROC curves show each model's ability to distinguish between the three outcome "
+            "classes. Higher AUC indicates better discrimination ability. LightGBM achieves "
+            "the highest AUC across all three classes."
+        )
+        if mlp_available:
+            st.caption("Note: MLP Neural Network is excluded from ROC curves. Use the model selector above to view sklearn models only.")
+
     # ── Neural Network Training History ──────────────────────────────
     if mlp_available and os.path.exists("eda_plots/mlp_training_history.png"):
         hr()
